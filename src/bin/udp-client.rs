@@ -3,11 +3,13 @@ use std::io::{self, Write};
 use std::thread::{self, JoinHandle};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::collections::VecDeque;
 
 struct UdpClient{
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Mutex<Vec<thread::JoinHandle<()>>>,
+    messages_queue: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl UdpClient {
@@ -15,18 +17,25 @@ impl UdpClient {
     fn create() -> Arc<UdpClient>{
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
-        let instance= Arc::new(UdpClient {
+        let mut instance= Arc::new(UdpClient {
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Mutex::new(Vec::new()),
+            messages_queue: Arc::new(Mutex::new(VecDeque::new())),
         });
+        instance.add_to_messages_queue("HELLO");
         instance.connect();
         instance.main_loop();
         instance
     }
 
+    fn add_to_messages_queue(&self,s: &str){
+        let mut msg_queue = self.messages_queue.lock().unwrap();
+        msg_queue.push_back(s.to_string());
+    }
+
     fn connect(&self) {
-        let mut socket = self.socket.lock().unwrap();
+        let mut socket: std::sync::MutexGuard<'_, UdpSocket> = self.socket.lock().unwrap();
         socket.connect("127.0.0.1:8080").expect("Connessione fallita");
         println!("Connessione eseguita.");    
     }
@@ -68,11 +77,19 @@ impl UdpClient {
 
     fn fetch_and_send_loop(&self) {
         loop {
-            let mut input = String::new();
-            input.push_str("CIAO!");
+            let mut msg;
+            
+            if !self.messages_queue.lock().unwrap().is_empty() {
+                let mut mq = self.messages_queue.lock().unwrap();
+                msg = mq.pop_front().unwrap();
+            }else{
+                msg = String::new();
+                msg.push_str("CIAO!");
+            }
+
             {
                 let mut socket = self.socket.lock().unwrap();
-                socket.send(input.as_bytes()).unwrap();
+                socket.send(msg.as_bytes()).unwrap();
             }
             thread::sleep(Duration::from_secs(1));
         }
