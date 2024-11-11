@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::collections::VecDeque;
 
+use asynchronous_messages_exchanger_rust::utilities;
+mod msg_pack;
+
 struct UdpClient{
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
@@ -135,6 +138,9 @@ impl UdpClient {
                 let socket = self.socket.lock().unwrap();
                 match socket.recv_from(&mut buffer) {
                     Ok((size, _)) => {
+
+                        
+
                         println!("Messaggio ricevuto: {}", String::from_utf8_lossy(&buffer[..size]));
                     }
                     Err(e) => {

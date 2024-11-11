@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "asynchronous-messages-exchanger-rust"
+name = "asynchronous_messages_exchanger_rust"
 version = "0.1.0"
