@@ -16,16 +16,18 @@ impl UdpClient {
 
     fn run() -> (){
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
-        socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
+        //socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
         let mut instance= Arc::new(UdpClient {
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
         });
-        instance.connect();
+        instance.initialize();
         instance.main_loop();
     }
+
+
 
     fn add_to_messages_queue(&self,s: &str){
         let mut msg_queue = self.messages_queue.lock().unwrap();
@@ -42,13 +44,18 @@ impl UdpClient {
         self.add_to_messages_queue("HELLO");
     }
 
-    fn connect(&self) {
+
+
+    fn initialize(&self) {
         let mut socket: std::sync::MutexGuard<'_, UdpSocket> = self.socket.lock().unwrap();
         socket.connect("127.0.0.1:8080").expect("Connessione fallita");
         println!("Connessione eseguita.");    
     }
 
     
+
+
+
     fn task_launcher(&self){
         let f;
         {
@@ -94,6 +101,9 @@ impl UdpClient {
 
     }
 
+
+
+
     fn fetch_and_send_loop(&self) {
         loop {
             let mut msg;
@@ -103,7 +113,7 @@ impl UdpClient {
                 msg = mq.pop_front().unwrap();
             }else{
                 msg = String::new();
-                msg.push_str("CIAO!");
+                msg.push_str("Alive !!");
             }
 
             {
@@ -113,6 +123,9 @@ impl UdpClient {
             thread::sleep(Duration::from_secs(1));
         }
     }
+
+
+
 
     fn message_handler_loop(&self) {
         loop{
