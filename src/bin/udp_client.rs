@@ -118,12 +118,14 @@ impl UdpClient {
             let mut msg;
             
             if !self.messages_queue.lock().unwrap().is_empty() {
-                let mut mq = self.messages_queue.lock().unwrap();
-                msg = mq.pop_front().unwrap();
+                {
+                    let mut mq = self.messages_queue.lock().unwrap();
+                    msg = mq.pop_front().unwrap();
+                }
                 msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             }else{
                 msg = String::new();
-                msg.push_str("Alive !!");
+                msg.push_str("Alive!!");
                 msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             }
 
@@ -133,10 +135,13 @@ impl UdpClient {
                 socket.send(msg.as_bytes()).unwrap();
             }
             println!("Messaggio inviato: {:?}", msg);
-            let mut sent_messages = self.sent_messages.lock().unwrap();
-            sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
-            
-            *self.sent_sequence.lock().unwrap() += 1;
+            {
+                let mut sent_messages = self.sent_messages.lock().unwrap();
+                sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
+            }
+            {
+                *self.sent_sequence.lock().unwrap() += 1;
+            }
             thread::sleep(Duration::from_secs(1));
         }
     }
@@ -163,7 +168,11 @@ impl UdpClient {
                             println!("MSG ricevuto: {}", s);
                         }
                         MSG_TYPE::ACK =>{
-                            println!("ACK ricevuto: {}", s);
+                            println!("ACK ricevuto: {}", seq);
+                            {
+                                let mut sent_messages = self.sent_messages.lock().unwrap();
+                                sent_messages.remove(&seq);
+                            }
                         }
                         MSG_TYPE::UNKNOWN => {
                             println!("Messaggio sconosciuto.");
