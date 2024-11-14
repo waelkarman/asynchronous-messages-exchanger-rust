@@ -11,7 +11,7 @@ use asynchronous_messages_exchanger_rust::utilities::{self, MSG_TYPE};
 mod msg_pack;
 
 struct UdpClient{
-    sent_sequence: i32,
+    sent_sequence: Arc<Mutex<i32>>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
@@ -25,7 +25,7 @@ impl UdpClient {
         let socket= UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
         let mut instance= Arc::new(UdpClient {
-            sent_sequence: 0,
+            sent_sequence: Arc::new(Mutex::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
@@ -120,11 +120,11 @@ impl UdpClient {
             if !self.messages_queue.lock().unwrap().is_empty() {
                 let mut mq = self.messages_queue.lock().unwrap();
                 msg = mq.pop_front().unwrap();
-                msg = msg_pack::msg_pack(self.sent_sequence, MSG_TYPE::MSG,msg);
+                msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             }else{
                 msg = String::new();
                 msg.push_str("Alive !!");
-                msg = msg_pack::msg_pack(self.sent_sequence, MSG_TYPE::MSG,msg);
+                msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             }
 
             
@@ -134,8 +134,9 @@ impl UdpClient {
             }
             println!("Messaggio inviato: {:?}", msg);
             let mut sent_messages = self.sent_messages.lock().unwrap();
-            sent_messages.insert(self.sent_sequence, msg);
-            //self.sent_sequence += 1;
+            sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
+            
+            *self.sent_sequence.lock().unwrap() += 1;
             thread::sleep(Duration::from_secs(1));
         }
     }
