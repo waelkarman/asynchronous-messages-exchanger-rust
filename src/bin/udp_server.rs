@@ -1,6 +1,9 @@
 use std::net::UdpSocket;
 use std::str;
 
+use asynchronous_messages_exchanger_rust::utilities::{self, MSG_TYPE};
+mod msg_pack;
+
 struct UdpServer{
     socket: UdpSocket,
 }
@@ -18,10 +21,12 @@ impl UdpServer {
             let (bytes_received, client_addr) = self.socket.recv_from(&mut buffer).unwrap();
             let msg = str::from_utf8(&buffer[..bytes_received]).expect("Messaggio non in formato UTF-8");
     
-            println!("Ricevuto dal client {}: '{}'", client_addr, msg);
+            println!("Ricevuto dal client {}: {}", client_addr, msg);
     
-            let response = format!("Messaggio ricevuto: '{}'", msg);
-            self.socket.send_to(response.as_bytes(), client_addr).unwrap();
+            let (seq, msg_t, s) = msg_pack::msg_unpack(String::from(msg));
+
+            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::ACK, s);
+            self.socket.send_to(response_plus.as_bytes(), client_addr).unwrap();
         }
     }
 

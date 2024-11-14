@@ -2,24 +2,28 @@
 use asynchronous_messages_exchanger_rust::utilities::{MSG_TYPE};
 
 
-pub fn msg_pack(msg_type: MSG_TYPE,s: String) -> String {
+pub fn msg_pack(seq: i32, msg_type: MSG_TYPE,s: String) -> String {
     let msg_type_str = format!("{:?}", msg_type);
-    let mut complete_msg = String::from(msg_type_str.as_str());
+    let mut complete_msg = String::from(seq.to_string());
+    complete_msg.push_str("."); 
+    complete_msg.push_str(msg_type_str.as_str());
     complete_msg.push_str("."); 
     complete_msg.push_str(s.as_str()); 
     complete_msg
 }
 
-pub fn msg_unpack(s: String) -> (MSG_TYPE, String) {
-    if let Some((msg_type_str, message)) = s.split_once('.') {
+pub fn msg_unpack(s: String) -> (i32, MSG_TYPE, String) {
+    let mut parts = s.splitn(3, '.');
+    if let (Some(seq_str), Some(msg_type_str), Some(message)) = (parts.next(), parts.next(), parts.next()) {
+        let seq = seq_str.parse::<i32>().unwrap_or(0);
         let msg_type = match msg_type_str {
             "ACK" => MSG_TYPE::ACK,
-            "NACK" => MSG_TYPE::MSG,
+            "MSG" => MSG_TYPE::MSG,
             _ => MSG_TYPE::UNKNOWN, 
         };
-        (msg_type, message.to_string())
+        (seq, msg_type, message.to_string())
     } else {
-        (MSG_TYPE::UNKNOWN, String::from(""))
+        panic!();
     }
 }
 

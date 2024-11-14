@@ -4,11 +4,15 @@ use std::thread::{self, JoinHandle};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::collections::VecDeque;
+use std::collections::HashMap;
 
-use asynchronous_messages_exchanger_rust::utilities;
+
+use asynchronous_messages_exchanger_rust::utilities::{self, MSG_TYPE};
 mod msg_pack;
 
 struct UdpClient{
+    sent_sequence: i32,
+    sent_messages: Arc<Mutex<HashMap<i32,String>>>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>, 
@@ -18,9 +22,11 @@ struct UdpClient{
 impl UdpClient {
 
     fn run() -> (){
-        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
-        //socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
+        let socket= UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
         let mut instance= Arc::new(UdpClient {
+            sent_sequence: 0,
+            sent_messages: Arc::new(Mutex::new(HashMap::new())),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
@@ -50,7 +56,7 @@ impl UdpClient {
 
 
     fn initialize(&self) {
-        let mut socket: std::sync::MutexGuard<'_, UdpSocket> = self.socket.lock().unwrap();
+        let mut socket   = self.socket.lock().unwrap();
         socket.connect("127.0.0.1:8080").expect("Connessione fallita");
         println!("Connessione eseguita.");    
     }
@@ -114,15 +120,22 @@ impl UdpClient {
             if !self.messages_queue.lock().unwrap().is_empty() {
                 let mut mq = self.messages_queue.lock().unwrap();
                 msg = mq.pop_front().unwrap();
+                msg = msg_pack::msg_pack(self.sent_sequence, MSG_TYPE::MSG,msg);
             }else{
                 msg = String::new();
                 msg.push_str("Alive !!");
+                msg = msg_pack::msg_pack(self.sent_sequence, MSG_TYPE::MSG,msg);
             }
 
+            
             {
                 let mut socket = self.socket.lock().unwrap();
                 socket.send(msg.as_bytes()).unwrap();
             }
+            println!("Messaggio inviato: {:?}", msg);
+            let mut sent_messages = self.sent_messages.lock().unwrap();
+            sent_messages.insert(self.sent_sequence, msg);
+            //self.sent_sequence += 1;
             thread::sleep(Duration::from_secs(1));
         }
     }
@@ -132,23 +145,34 @@ impl UdpClient {
 
     fn message_handler_loop(&self) {
         loop{
-            let mut buffer = [0u8; 1024];
-
+            let mut buffer = [0u8; 1024];            
+            let out;
             {
                 let socket = self.socket.lock().unwrap();
-                match socket.recv_from(&mut buffer) {
-                    Ok((size, _)) => {
+                out = socket.recv_from(&mut buffer);
+            }
 
-                        
-
-                        println!("Messaggio ricevuto: {}", String::from_utf8_lossy(&buffer[..size]));
-                    }
-                    Err(e) => {
-                        println!("Errore durante la ricezione: {:?}", e);
+            match out {
+                Ok((size, _)) => {
+                    let message = String::from_utf8_lossy(&buffer[..size]).to_string();
+                    let cleaned_message = message.replace("'", "");
+                    let (seq, msg_t, s) = msg_pack::msg_unpack(cleaned_message);
+                    match msg_t {
+                        MSG_TYPE::MSG => {
+                            println!("MSG ricevuto: {}", s);
+                        }
+                        MSG_TYPE::ACK =>{
+                            println!("ACK ricevuto: {}", s);
+                        }
+                        MSG_TYPE::UNKNOWN => {
+                            println!("Messaggio sconosciuto.");
+                        }
                     }
                 }
+                Err(e) => {
+                    continue;                    
+                }
             }
-            thread::sleep(Duration::from_secs(1));
         }
     }
 
