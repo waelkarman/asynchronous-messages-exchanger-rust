@@ -28,6 +28,7 @@ struct UdpClient{
     send_failure: Arc<Mutex<i32>>,
     ordered_window_size: Arc<i32>,
     limit: Arc<i32>,
+    max: bool,
 }
 
 impl UdpClient {
@@ -53,6 +54,7 @@ impl UdpClient {
             send_failure: Arc::new(Mutex::new(0)),
             ordered_window_size: Arc::new(ordered_window_size),
             limit: Arc::new(200000000*ordered_window_size),
+            max: true,
         });
         instance.initialize();
         instance.main_loop();
@@ -66,8 +68,11 @@ impl UdpClient {
     fn message_generator(&self){
         let mut rng = rand::thread_rng();
         loop{
-            let random_number = rng.gen_range(1..=500);
-            thread::sleep(Duration::from_millis(random_number));
+            let mut random_number = 0;
+            if !self.max {
+                random_number = rng.gen_range(1..=500);
+                thread::sleep(Duration::from_millis(random_number));
+            }
             let mut message = String::from("HELLO ");
             message.push_str(random_number.to_string().as_str());
             message.push_str("ms");
