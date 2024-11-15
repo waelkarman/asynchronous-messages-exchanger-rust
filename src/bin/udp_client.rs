@@ -21,7 +21,7 @@ struct UdpClient{
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
-    t_handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>, 
+    t_handlers: Arc<Mutex<HashMap<i32,std::thread::JoinHandle<()>>>>, 
     messages_queue: Arc<Mutex<VecDeque<String>>>,
     messages_queue_condvar: Arc<Condvar>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
@@ -43,7 +43,7 @@ impl UdpClient {
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
-            t_handlers: Arc::new(Mutex::new(Vec::new())),
+            t_handlers: Arc::new(Mutex::new(HashMap::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
             messages_queue_condvar: Arc::new(Condvar::new()),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
@@ -152,7 +152,7 @@ impl UdpClient {
                 while !self.tasks.lock().unwrap().is_empty() {
                     let client_clone = Arc::clone(&self);
                     let mut t_handlers = self.t_handlers.lock().unwrap();
-                    t_handlers.push(thread::spawn(move || { 
+                    t_handlers.insert(index,thread::spawn(move || { 
                         client_clone.task_launcher(); 
                     }));
                 }
@@ -161,13 +161,19 @@ impl UdpClient {
             loop {
                 match rx.try_recv() {
                     Ok(message) => {
-                        println!("TERMINO THREAD {}",message);
+                        println!("Timer for message {} ended!",message);
                         let mut t_handlers = self.t_handlers.lock().unwrap();
-                        for task in t_handlers.drain(..) {
-                            if let Err(e) = task.join() {
-                                eprintln!("The thread returned an error: {:?}", e);
-                            }
+                        let key: i32 = message.parse().unwrap();
+
+                        let task = t_handlers.get(&key).unwrap();
+
+                        if let Some(task) = t_handlers.remove(&key) {
+                            task.join().unwrap();
+                            println!("Joined and removed element with key: {}", key);
+                        } else {
+                            println!("Key not found in the HashMap.");
                         }
+
                         break;
                     }
                     Err(err) => {
