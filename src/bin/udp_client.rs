@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::collections::VecDeque;
 use std::collections::HashMap;
 use std::sync::mpsc;
+use std::process;
 
 use rand::Rng;
 
@@ -107,9 +108,17 @@ impl UdpClient {
     //     }
     // }
 
-    // fn connection_monitor(&self){
+    fn connection_monitor(&self){
+        loop{
+            thread::sleep(Duration::from_secs(3)); 
 
-    // }
+            let send_failure = self.send_failure.lock().unwrap();
+            if *send_failure > 0 {
+                println!("fatal error: broken pipe");
+                process::exit(1);
+            }
+        }
+    }
 
     fn timer_launcher(&self, n: i32, index: i32) {
         let mut attempt = 1;
@@ -244,6 +253,11 @@ impl UdpClient {
         let client_clone = Arc::clone(&self);
         self.tasks.lock().unwrap().push(Arc::new(move || {
             client_clone.timers_loop();
+        }));
+
+        let client_clone = Arc::clone(&self);
+        self.tasks.lock().unwrap().push(Arc::new(move || {
+            client_clone.connection_monitor();
         }));
 
         while !self.tasks.lock().unwrap().is_empty() {
