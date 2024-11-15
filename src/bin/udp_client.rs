@@ -20,12 +20,14 @@ struct UdpClient{
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
-    t_handlers: Arc<Mutex<HashMap<i32,std::thread::JoinHandle<()>>>>, 
+    timers_handlers: Arc<Mutex<HashMap<i32,std::thread::JoinHandle<()>>>>,
     messages_queue: Arc<Mutex<VecDeque<String>>>,
     messages_queue_condvar: Arc<Condvar>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
     messages_to_print_condvar: Arc<Condvar>,
     send_failure: Arc<Mutex<i32>>,
+    ordered_window_size: Arc<i32>,
+    limit: Arc<i32>,
 }
 
 impl UdpClient {
@@ -33,6 +35,7 @@ impl UdpClient {
     fn run() -> (){
         let socket= UdpSocket::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).expect("Error setting non blocking");
+        let ordered_window_size = 10;
         let instance= Arc::new(UdpClient {
             sent_sequence: Arc::new(Mutex::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
@@ -42,12 +45,14 @@ impl UdpClient {
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
-            t_handlers: Arc::new(Mutex::new(HashMap::new())),
+            timers_handlers: Arc::new(Mutex::new(HashMap::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
             messages_queue_condvar: Arc::new(Condvar::new()),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
             messages_to_print_condvar: Arc::new(Condvar::new()),
             send_failure: Arc::new(Mutex::new(0)),
+            ordered_window_size: Arc::new(ordered_window_size),
+            limit: Arc::new(200000000*ordered_window_size),
         });
         instance.initialize();
         instance.main_loop();
@@ -74,7 +79,7 @@ impl UdpClient {
     fn initialize(&self) {
         let socket   = self.socket.lock().unwrap();
         socket.connect("127.0.0.1:8080").expect("Connection failed.");
-        println!("Connection established.");    
+        println!("Connection established.");
     }
 
     fn task_launcher(&self){
@@ -84,14 +89,13 @@ impl UdpClient {
             f = tasks.pop();
         }
         if let Some(task) = f {
-            task();  
+            task();
         }
     }
 
     fn handle_printing(&self){
-        let ordered_window_size = 5 as i32;
         let mut message_processed = 0;
-        let mut ordered_window = vec![String::from("invalid"); ordered_window_size as usize];
+        let mut ordered_window = vec![String::from("invalid"); *self.ordered_window_size as usize];
         loop{
             {
                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
@@ -100,35 +104,36 @@ impl UdpClient {
                 }
             }
 
-            while !self.messages_to_print.lock().unwrap().is_empty() {
-                let mut position_int;
-                let messages_to_print = self.messages_to_print.lock().unwrap();
-                if let Some(element) = messages_to_print.get(&message_processed) {
-                    let position = message_processed % ordered_window_size;
-                    position_int = position as usize;
-                    if let Some(valore) = ordered_window.get_mut(position_int) {
-                        *valore = element.clone();
+            while self.messages_to_print.lock().unwrap().contains_key(&message_processed) {
+                {
+                    let position_int;
+                    let messages_to_print = self.messages_to_print.lock().unwrap();
+                    if let Some(element) = messages_to_print.get(&message_processed) {
+                        let position = message_processed % *self.ordered_window_size;
+                        position_int = position as usize;
+                        if let Some(valore) = ordered_window.get_mut(position_int) {
+                            *valore = element.clone();
+                        }
                     }
-                    message_processed += 1;
-                }else{
-                    //salta e aspetta se non c'è il prossimo della sequenza
-                    break;
                 }
 
-                if position_int as i32 == ordered_window_size-1 {
-                    println!("--------------------------{:?}", ordered_window);
+                {
+                    let mut messages_to_print = self.messages_to_print.lock().unwrap();
+                    messages_to_print.remove(&message_processed);
                 }
+
+                if (message_processed % *self.ordered_window_size) as i32 == *self.ordered_window_size - 1 {
+                    println!("{:?}", ordered_window);
+                }
+
+                message_processed = (message_processed+1) % *self.limit;
             }
-
-            // gestisci una finestra che tenga in conto dell'out-of-order
-            // while !self.messages_to_print.lock().unwrap().is_empty() {
-
         }
     }
 
     fn connection_monitor(&self){
         loop{
-            thread::sleep(Duration::from_secs(3)); 
+            thread::sleep(Duration::from_secs(3));
 
             let send_failure = self.send_failure.lock().unwrap();
             if *send_failure > 0 {
@@ -142,24 +147,24 @@ impl UdpClient {
         let mut attempt = 1;
         let mut spin = true;
         while attempt < 4 && spin {
-            thread::sleep(Duration::from_millis(n as u64)); 
+            thread::sleep(Duration::from_millis(n as u64));
             let contains;
             {
                 let sent_messages = self.sent_messages.lock().unwrap();
                 contains = sent_messages.contains_key(&index);
-            }   
-             
+            }
+
             if contains {
                 println!("Timeout:{} retry attempt: {}/3",index,attempt);
                 attempt += 1;
-                
+
                 let sent_messages = self.sent_messages.lock().unwrap();
                 if let Some(msg) = sent_messages.get(&index) {
                     let socket = self.socket.lock().unwrap();
                     socket.send(msg.as_bytes()).unwrap();
                     println!("Message resend: {:?}", msg);
                 }
-                
+
             } else {
                 println!("Message {} delivered.",index);
                 spin = false;
@@ -170,8 +175,8 @@ impl UdpClient {
         {
             println!("Message {} delivery failure.",index);
             *self.send_failure.lock().unwrap() += 1;
-        }        
-        
+        }
+
     }
 
     fn timers_loop(self: &Arc<Self>){
@@ -183,7 +188,7 @@ impl UdpClient {
                 let sent_messages = self.sent_messages.lock().unwrap();
                 contains = sent_messages.contains_key(&index);
             }
-                
+
             while !contains {
                 {
                     let mut sent_messages = self.sent_messages.lock().unwrap();
@@ -208,30 +213,30 @@ impl UdpClient {
                     thread_tx.send(format!("{}",index_ref)).unwrap();
                 }));
                 drop(tasks);
-        
+
                 while !self.tasks.lock().unwrap().is_empty() {
                     let client_clone = Arc::clone(&self);
-                    let mut t_handlers = self.t_handlers.lock().unwrap();
-                    t_handlers.insert(index,thread::spawn(move || { 
-                        client_clone.task_launcher(); 
+                    let mut timers_handlers = self.timers_handlers.lock().unwrap();
+                    timers_handlers.insert(index,thread::spawn(move || {
+                        client_clone.task_launcher();
                     }));
                 }
             }
-            
+
             loop {
                 match rx.try_recv() {
                     Ok(message) => {
-                        println!("Timer for message {} ended!",message);
-                        let mut t_handlers = self.t_handlers.lock().unwrap();
+                        //println!("Timer for message {} ended!",message);
+                        let mut timers_handlers = self.timers_handlers.lock().unwrap();
                         let key: i32 = message.parse().unwrap();
 
-                        let task = t_handlers.get(&key).unwrap();
+                        let task = timers_handlers.get(&key).unwrap();
 
-                        if let Some(task) = t_handlers.remove(&key) {
+                        if let Some(task) = timers_handlers.remove(&key) {
                             task.join().unwrap();
-                            println!("Joined and removed element with key: {}", key);
+                            //println!("Joined and removed element with key: {}", key);
                         } else {
-                            println!("Key not found in the HashMap.");
+                            println!("Key not found in the timers_handlers.");
                         }
 
                         break;
@@ -241,7 +246,7 @@ impl UdpClient {
                     }
                 }
             }
-            index += 1;         
+            index += 1;
         }
     }
 
@@ -286,8 +291,8 @@ impl UdpClient {
         while !self.tasks.lock().unwrap().is_empty() {
             let client_clone = Arc::clone(&self);
             let mut handlers = self.handlers.lock().unwrap();
-            handlers.push(thread::spawn(move || { 
-                client_clone.task_launcher(); 
+            handlers.push(thread::spawn(move || {
+                client_clone.task_launcher();
             }));
         }
 
@@ -316,7 +321,7 @@ impl UdpClient {
                 msg = mq.pop_front().unwrap();
             }
             msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
-            
+
             {
                 let socket = self.socket.lock().unwrap();
                 socket.send(msg.as_bytes()).unwrap();
@@ -327,9 +332,10 @@ impl UdpClient {
                 sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
                 self.sent_messages_condvar.notify_all();
             }
-            
+
             {
-                *self.sent_sequence.lock().unwrap() += 1;
+                let updated_seq = *self.sent_sequence.lock().unwrap();
+                *self.sent_sequence.lock().unwrap() = (updated_seq+1) % *self.limit;
             }
         }
     }
@@ -353,7 +359,7 @@ impl UdpClient {
                     let mut sent_messages = self.sent_messages.lock().unwrap();
                     match sent_messages.remove(&ack_n) {
                         Some(msg) => {
-                            println!("Message with sequence {} successfully removed: {:?}.", ack_n, msg);
+                            //println!("Message with sequence {} successfully removed: {:?}.", ack_n, msg);
                         }
                         None => {
                             println!("Duplicate ACK received for sequence {}: message already removed.", ack_n);
@@ -366,7 +372,7 @@ impl UdpClient {
 
     fn message_handler_loop(&self) {
         loop{
-            let mut buffer = [0u8; 1024];            
+            let mut buffer = [0u8; 1024];
             let out;
             {
                 let socket = self.socket.lock().unwrap();
@@ -380,7 +386,7 @@ impl UdpClient {
                     let (seq, msg_t, s) = msg_pack::msg_unpack(cleaned_message);
                     match msg_t {
                         MSG_TYPE::MSG => {
-                            println!("MSG received: {}", s);
+                            //println!("MSG received: {}", s);
                             {
                                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
                                 messages_to_print.insert(seq,s);
@@ -388,7 +394,7 @@ impl UdpClient {
                             }
                         }
                         MSG_TYPE::ACK =>{
-                            println!("ACK received: {}", seq);
+                            //println!("ACK received: {}", seq);
                             {
                                 let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
                                 recv_ack_queue.push_back(seq);
@@ -401,7 +407,7 @@ impl UdpClient {
                     }
                 }
                 Err(e) => {
-                    continue;                    
+                    continue;
                 }
             }
         }
