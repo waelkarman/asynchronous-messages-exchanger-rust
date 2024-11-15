@@ -6,9 +6,7 @@ use std::collections::VecDeque;
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::process;
-
 use rand::Rng;
-
 
 use asynchronous_messages_exchanger_rust::utilities::MSG_TYPE;
 mod msg_pack;
@@ -90,23 +88,43 @@ impl UdpClient {
         }
     }
 
-    // fn handle_printing(&self){
-    //     loop{
-    //         {
-    //             let mut messages_to_print = self.messages_to_print.lock().unwrap();
-    //             while messages_to_print.is_empty() {
-    //                 messages_to_print = self.messages_to_print_condvar.wait(messages_to_print).unwrap();
-    //             }
-    //         }
+    fn handle_printing(&self){
+        let ordered_window_size = 5 as i32;
+        let mut message_processed = 0;
+        let mut ordered_window = vec![String::from("invalid"); ordered_window_size as usize];
+        loop{
+            {
+                let mut messages_to_print = self.messages_to_print.lock().unwrap();
+                while messages_to_print.is_empty() {
+                    messages_to_print = self.messages_to_print_condvar.wait(messages_to_print).unwrap();
+                }
+            }
 
-    //         // gestisci una finestra che tenga in conto dell'out-of-order
-    //         // while !self.messages_to_print.lock().unwrap().is_empty() {
-                
-    //         // }
-    //         thread::sleep(Duration::from_secs(1));
+            while !self.messages_to_print.lock().unwrap().is_empty() {
+                let mut position_int;
+                let messages_to_print = self.messages_to_print.lock().unwrap();
+                if let Some(element) = messages_to_print.get(&message_processed) {
+                    let position = message_processed % ordered_window_size;
+                    position_int = position as usize;
+                    if let Some(valore) = ordered_window.get_mut(position_int) {
+                        *valore = element.clone();
+                    }
+                    message_processed += 1;
+                }else{
+                    //salta e aspetta se non c'è il prossimo della sequenza
+                    break;
+                }
 
-    //     }
-    // }
+                if position_int as i32 == ordered_window_size-1 {
+                    println!("--------------------------{:?}", ordered_window);
+                }
+            }
+
+            // gestisci una finestra che tenga in conto dell'out-of-order
+            // while !self.messages_to_print.lock().unwrap().is_empty() {
+
+        }
+    }
 
     fn connection_monitor(&self){
         loop{
@@ -260,6 +278,11 @@ impl UdpClient {
             client_clone.connection_monitor();
         }));
 
+        let client_clone = Arc::clone(&self);
+        self.tasks.lock().unwrap().push(Arc::new(move || {
+            client_clone.handle_printing();
+        }));
+
         while !self.tasks.lock().unwrap().is_empty() {
             let client_clone = Arc::clone(&self);
             let mut handlers = self.handlers.lock().unwrap();
@@ -361,6 +384,7 @@ impl UdpClient {
                             {
                                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
                                 messages_to_print.insert(seq,s);
+                                self.messages_to_print_condvar.notify_all();
                             }
                         }
                         MSG_TYPE::ACK =>{

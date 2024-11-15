@@ -25,7 +25,9 @@ impl UdpServer {
     
             let (seq, msg_t, s) = msg_pack::msg_unpack(String::from(msg));
 
-            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::ACK, s);
+            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::ACK, s.clone());
+            self.socket.send_to(response_plus.as_bytes(), client_addr).unwrap();
+            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::MSG, s.clone());
             self.socket.send_to(response_plus.as_bytes(), client_addr).unwrap();
         }
     }
