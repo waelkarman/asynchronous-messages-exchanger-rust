@@ -14,3 +14,4 @@ cargo build; cargo run --bin udp-server
 
 ###### Improvements : 
 [still in development]
+- manage sequence rollover

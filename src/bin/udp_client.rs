@@ -4,6 +4,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::sync::mpsc;
+
+use rand::Rng;
 
 
 use asynchronous_messages_exchanger_rust::utilities::MSG_TYPE;
@@ -12,12 +15,15 @@ mod msg_pack;
 struct UdpClient{
     sent_sequence: Arc<Mutex<i32>>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
+    sent_messages_condvar: Arc<Condvar>,
     recv_ack_queue: Arc<Mutex<VecDeque<i32>>>,
     recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
-    handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>, 
+    handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    t_handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>, 
     messages_queue: Arc<Mutex<VecDeque<String>>>,
+    messages_queue_condvar: Arc<Condvar>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
     messages_to_print_condvar: Arc<Condvar>,
 
@@ -27,16 +33,19 @@ impl UdpClient {
 
     fn run() -> (){
         let socket= UdpSocket::bind("127.0.0.1:0").unwrap();
-        socket.set_nonblocking(true).expect("Errore nella impostazione della socket come non bloccante");
+        socket.set_nonblocking(true).expect("Error setting non blocking");
         let instance= Arc::new(UdpClient {
             sent_sequence: Arc::new(Mutex::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
+            sent_messages_condvar: Arc::new(Condvar::new()),
             recv_ack_queue: Arc::new(Mutex::new(VecDeque::new())),
             recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
+            t_handlers: Arc::new(Mutex::new(Vec::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
+            messages_queue_condvar: Arc::new(Condvar::new()),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
             messages_to_print_condvar: Arc::new(Condvar::new()),
         });
@@ -49,20 +58,23 @@ impl UdpClient {
         msg_queue.push_back(s.to_string());
     }
 
-    fn filler(&self){
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
-        self.add_to_messages_queue("HELLO");
+    fn message_generator(&self){
+        let mut rng = rand::thread_rng();
+        loop{
+            let random_number = rng.gen_range(1..=500);
+            thread::sleep(Duration::from_millis(random_number));
+            let mut message = String::from("HELLO ");
+            message.push_str(random_number.to_string().as_str());
+            message.push_str("ms");
+            self.add_to_messages_queue(&message);
+            self.messages_queue_condvar.notify_all();
+        }
     }
 
     fn initialize(&self) {
         let socket   = self.socket.lock().unwrap();
-        socket.connect("127.0.0.1:8080").expect("Connessione fallita");
-        println!("Connessione eseguita.");    
+        socket.connect("127.0.0.1:8080").expect("Connection failed.");
+        println!("Connection established.");    
     }
 
     fn task_launcher(&self){
@@ -75,6 +87,99 @@ impl UdpClient {
             task();  
         }
     }
+
+    // fn handle_printing(&self){
+    //     loop{
+    //         {
+    //             let mut messages_to_print = self.messages_to_print.lock().unwrap();
+    //             while messages_to_print.is_empty() {
+    //                 messages_to_print = self.messages_to_print_condvar.wait(messages_to_print).unwrap();
+    //             }
+    //         }
+
+    //         // gestisci una finestra che tenga in conto dell'out-of-order
+    //         // while !self.messages_to_print.lock().unwrap().is_empty() {
+                
+    //         // }
+    //         thread::sleep(Duration::from_secs(1));
+
+    //     }
+    // }
+
+    // fn connection_monitor(&self){
+
+    // }
+
+    fn timer_launcher(&self, n: i32) {
+        thread::sleep(Duration::from_millis(n as u64)); 
+    }
+
+    fn timers_loop(self: &Arc<Self>){
+        let (tx, rx) = mpsc::channel();
+        let mut index = 0;
+        loop{
+            let mut contains= false;
+            {
+                let sent_messages = self.sent_messages.lock().unwrap();
+                contains = sent_messages.contains_key(&index);
+            }
+                
+            while !contains {
+                {
+                    let mut sent_messages = self.sent_messages.lock().unwrap();
+                    while sent_messages.is_empty() {
+                        sent_messages = self.sent_messages_condvar.wait(sent_messages).unwrap();
+                    }
+                }
+                {
+                    let sent_messages = self.sent_messages.lock().unwrap();
+                    contains = sent_messages.contains_key(&index);
+                }
+            }
+
+            if contains{
+                let thread_tx = tx.clone();
+                let client_clone = Arc::clone(&self);
+                let index_ref = index;
+
+                let mut tasks = self.tasks.lock().unwrap();
+                tasks.push(Arc::new(move || {
+                    client_clone.timer_launcher(500);
+                    thread_tx.send(format!("{}",index_ref)).unwrap();
+                }));
+                drop(tasks);
+        
+                while !self.tasks.lock().unwrap().is_empty() {
+                    let client_clone = Arc::clone(&self);
+                    let mut t_handlers = self.t_handlers.lock().unwrap();
+                    t_handlers.push(thread::spawn(move || { 
+                        client_clone.task_launcher(); 
+                    }));
+                }
+            }
+            
+            loop {
+                match rx.try_recv() {
+                    Ok(message) => {
+                        println!("TERMINO THREAD {}",message);
+                        let mut t_handlers = self.t_handlers.lock().unwrap();
+                        for task in t_handlers.drain(..) {
+                            if let Err(e) = task.join() {
+                                eprintln!("The thread returned an error: {:?}", e);
+                            }
+                        }
+                        break;
+                    }
+                    Err(err) => {
+                        break;
+                    }
+                }
+            }
+            index += 1;         
+        }
+    }
+
+
 
     fn main_loop(self: &Arc<Self>){
         let client_clone = Arc::clone(&self);
@@ -89,12 +194,17 @@ impl UdpClient {
 
         let client_clone = Arc::clone(&self);
         self.tasks.lock().unwrap().push(Arc::new(move || {
-            client_clone.filler();
+            client_clone.message_generator();
         }));
 
         let client_clone = Arc::clone(&self);
         self.tasks.lock().unwrap().push(Arc::new(move || {
-            client_clone.received_message_loop();
+            client_clone.confirm_message_delivery();
+        }));
+
+        let client_clone = Arc::clone(&self);
+        self.tasks.lock().unwrap().push(Arc::new(move || {
+            client_clone.timers_loop();
         }));
 
         while !self.tasks.lock().unwrap().is_empty() {
@@ -105,50 +215,50 @@ impl UdpClient {
             }));
         }
 
-        /* DIVERSO COMPORTAMENTO CON IL C++ */
+        /* Rust & C++ main difference in thread handling*/
         let mut handlers = self.handlers.lock().unwrap();
         for task in handlers.drain(..) {
             if let Err(e) = task.join() {
-                eprintln!("Il thread ha restituito un errore: {:?}", e);
+                eprintln!("The thread returned an error: {:?}", e);
             }
         }
-
     }
 
     fn fetch_and_send_loop(&self) {
         loop {
-            let mut msg;
-
-            if !self.messages_queue.lock().unwrap().is_empty() {
-                {
-                    let mut mq = self.messages_queue.lock().unwrap();
-                    msg = mq.pop_front().unwrap();
+            {
+                let mut messages_queue = self.messages_queue.lock().unwrap();
+                while messages_queue.is_empty() {
+                    messages_queue = self.messages_queue_condvar.wait(messages_queue).unwrap();
                 }
-                msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
-            }else{
-                msg = String::new();
-                msg.push_str("Alive!!");
-                msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             }
 
+            let mut msg;
+
+            {
+                let mut mq = self.messages_queue.lock().unwrap();
+                msg = mq.pop_front().unwrap();
+            }
+            msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MSG_TYPE::MSG,msg);
             
             {
                 let socket = self.socket.lock().unwrap();
                 socket.send(msg.as_bytes()).unwrap();
             }
-            println!("Messaggio inviato: {:?}", msg);
+            println!("Message sent: {:?}", msg);
             {
                 let mut sent_messages = self.sent_messages.lock().unwrap();
                 sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
+                self.sent_messages_condvar.notify_all();
             }
+            
             {
                 *self.sent_sequence.lock().unwrap() += 1;
             }
-            thread::sleep(Duration::from_millis(1));
         }
     }
 
-    fn received_message_loop(&self) {
+    fn confirm_message_delivery(&self) {
         loop{
             {
                 let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
