@@ -1,6 +1,6 @@
 use std::net::UdpSocket;
 use std::thread;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use std::collections::VecDeque;
 use std::collections::HashMap;
@@ -13,11 +13,14 @@ struct UdpClient{
     sent_sequence: Arc<Mutex<i32>>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
     recv_ack_queue: Arc<Mutex<VecDeque<i32>>>,
+    recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>, 
     messages_queue: Arc<Mutex<VecDeque<String>>>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
+    messages_to_print_condvar: Arc<Condvar>,
+
 }
 
 impl UdpClient {
@@ -29,11 +32,13 @@ impl UdpClient {
             sent_sequence: Arc::new(Mutex::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
             recv_ack_queue: Arc::new(Mutex::new(VecDeque::new())),
+            recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
+            messages_to_print_condvar: Arc::new(Condvar::new()),
         });
         instance.initialize();
         instance.main_loop();
@@ -145,7 +150,13 @@ impl UdpClient {
 
     fn received_message_loop(&self) {
         loop{
-            thread::sleep(Duration::from_secs(1));
+            {
+                let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
+                while recv_ack_queue.is_empty() {
+                    recv_ack_queue = self.recv_ack_queue_condvar.wait(recv_ack_queue).unwrap();
+                }
+            }
+
             while !self.recv_ack_queue.lock().unwrap().is_empty() {
                 let ack_n;
                 {
@@ -156,10 +167,10 @@ impl UdpClient {
                     let mut sent_messages = self.sent_messages.lock().unwrap();
                     match sent_messages.remove(&ack_n) {
                         Some(msg) => {
-                            println!("Messaggio con sequence {} rimosso correttamente: {:?}", ack_n, msg);
+                            println!("Message with sequence {} successfully removed: {:?}.", ack_n, msg);
                         }
                         None => {
-                            println!("ACK duplicato ricevuto per sequence {}: messaggio già rimosso", ack_n);
+                            println!("Duplicate ACK received for sequence {}: message already removed.", ack_n);
                         }
                     }
                 }
@@ -183,21 +194,22 @@ impl UdpClient {
                     let (seq, msg_t, s) = msg_pack::msg_unpack(cleaned_message);
                     match msg_t {
                         MSG_TYPE::MSG => {
-                            println!("MSG ricevuto: {}", s);
+                            println!("MSG received: {}", s);
                             {
                                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
                                 messages_to_print.insert(seq,s);
                             }
                         }
                         MSG_TYPE::ACK =>{
-                            println!("ACK ricevuto: {}", seq);
+                            println!("ACK received: {}", seq);
                             {
                                 let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
                                 recv_ack_queue.push_back(seq);
+                                self.recv_ack_queue_condvar.notify_all();
                             }
                         }
                         MSG_TYPE::UNKNOWN => {
-                            println!("Messaggio sconosciuto.");
+                            println!("Message type unknown.");
                         }
                     }
                 }
