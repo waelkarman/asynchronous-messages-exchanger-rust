@@ -26,7 +26,7 @@ struct UdpClient{
     messages_queue_condvar: Arc<Condvar>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
     messages_to_print_condvar: Arc<Condvar>,
-
+    send_failure: Arc<Mutex<i32>>,
 }
 
 impl UdpClient {
@@ -48,6 +48,7 @@ impl UdpClient {
             messages_queue_condvar: Arc::new(Condvar::new()),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
             messages_to_print_condvar: Arc::new(Condvar::new()),
+            send_failure: Arc::new(Mutex::new(0)),
         });
         instance.initialize();
         instance.main_loop();
@@ -110,8 +111,40 @@ impl UdpClient {
 
     // }
 
-    fn timer_launcher(&self, n: i32) {
-        thread::sleep(Duration::from_millis(n as u64)); 
+    fn timer_launcher(&self, n: i32, index: i32) {
+        let mut attempt = 1;
+        let mut spin = true;
+        while attempt < 4 && spin {
+            thread::sleep(Duration::from_millis(n as u64)); 
+            let contains;
+            {
+                let sent_messages = self.sent_messages.lock().unwrap();
+                contains = sent_messages.contains_key(&index);
+            }   
+             
+            if contains {
+                println!("Timeout:{} retry attempt: {}/3",index,attempt);
+                attempt += 1;
+                
+                let sent_messages = self.sent_messages.lock().unwrap();
+                if let Some(msg) = sent_messages.get(&index) {
+                    let socket = self.socket.lock().unwrap();
+                    socket.send(msg.as_bytes()).unwrap();
+                    println!("Message resend: {:?}", msg);
+                }
+                
+            } else {
+                println!("Message {} delivered.",index);
+                spin = false;
+            }
+        }
+
+        if attempt == 4 || spin
+        {
+            println!("Message {} delivery failure.",index);
+            *self.send_failure.lock().unwrap() += 1;
+        }        
+        
     }
 
     fn timers_loop(self: &Arc<Self>){
@@ -144,7 +177,7 @@ impl UdpClient {
 
                 let mut tasks = self.tasks.lock().unwrap();
                 tasks.push(Arc::new(move || {
-                    client_clone.timer_launcher(500);
+                    client_clone.timer_launcher(500,index);
                     thread_tx.send(format!("{}",index_ref)).unwrap();
                 }));
                 drop(tasks);
