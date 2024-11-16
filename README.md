@@ -14,4 +14,6 @@ cargo build; cargo run --bin udp-server
 
 ###### Improvements : 
 [still in development]
-- manage sequence rollover
+- trsforma pure il server
+- risolvi tutti i warning 
+- solve memory increasing issue
