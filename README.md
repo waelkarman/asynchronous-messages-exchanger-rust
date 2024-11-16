@@ -16,4 +16,4 @@ cargo build; cargo run --bin udp-server
 [still in development]
 - trsforma pure il server
 - risolvi tutti i warning 
-- solve memory increasing issue
+- risolvi i problemi della modalità Max

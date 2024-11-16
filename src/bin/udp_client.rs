@@ -78,25 +78,25 @@ impl UdpClient {
         let mut rng = rand::thread_rng();
         loop{
             let mut random_number = 0;
-            *self.current_speed.lock().unwrap() = random_number;
-            if !self.speed {
-                random_number = rng.gen_range(1..=1);
+            if self.speed == Speed::Dynamic.into() {
+                random_number = rng.gen_range(1..=2);
                 thread::sleep(Duration::from_millis(random_number));
             }
+            *self.current_speed.lock().unwrap() = random_number;
             let mut message = String::from("HELLO ");
             message.push_str(random_number.to_string().as_str());
             message.push_str("ms");
             self.add_to_messages_queue(&message);
             self.messages_queue_condvar.notify_all();
 
-            let val;
-            let sl;
+            let slow_factor;
+            let slow_down;
             {
-                sl = *self.slow_down.lock().unwrap();
-                val = *self.slow_factor.lock().unwrap();
-            }
-            if  sl {
-                thread::sleep(Duration::from_millis(val));
+                slow_down = *self.slow_down.lock().unwrap();
+                slow_factor = *self.slow_factor.lock().unwrap();
+                if slow_down {
+                    thread::sleep(Duration::from_millis(slow_factor));
+                }
             }
         }
     }
@@ -129,7 +129,12 @@ impl UdpClient {
                 }
             }
 
-            while self.messages_to_print.lock().unwrap().contains_key(&message_processed) {
+            loop {
+            
+                if !self.messages_to_print.lock().unwrap().contains_key(&message_processed) {
+                    break;
+                }
+            
                 {
                     let position_int;
                     let messages_to_print = self.messages_to_print.lock().unwrap();
@@ -148,7 +153,7 @@ impl UdpClient {
                 }
 
                 if (message_processed % *self.ordered_window_size) as i32 == *self.ordered_window_size - 1 {
-//                    println!("{:?}", ordered_window);
+                    println!("{:?}", ordered_window);
                 }
 
                 message_processed = (message_processed+1) % *self.limit;
@@ -158,33 +163,36 @@ impl UdpClient {
 
     fn connection_monitor(&self){
         let mut new_max_value = 0 as usize;
-        let mut old_max_value = 0 as usize;
-        let stress_factor = 10;
+        let stress_factor = 30;
         loop{
-            if *self.current_speed.lock().unwrap() != 0{
-                thread::sleep(Duration::from_secs(*self.current_speed.lock().unwrap()*3));
+            if self.speed == Speed::Dynamic.into() {
+                let current_speed = *self.current_speed.lock().unwrap();
+                thread::sleep(Duration::from_millis(current_speed*10));
+            }else{
+                thread::sleep(Duration::from_millis(1));
             }
 
-            // println!("Size of timers_handlers: {} bytes", mem::size_of_val(&self.timers_handlers.lock().unwrap()));
-            // println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
+            /* LOAD INFORMATIONS */
+            println!("Size of timers_handlers: {} bytes", mem::size_of_val(&self.timers_handlers.lock().unwrap()));
+            println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
+            
+            println!("Size of sent_messages: {} bytes", mem::size_of_val(&self.sent_messages.lock().unwrap()));
+            println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
+            
+            println!("Size of recv_ack_queue: {} bytes", mem::size_of_val(&self.recv_ack_queue.lock().unwrap()));
+            println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
+            
+            println!("Size of messages_queue: {} bytes", mem::size_of_val(&self.messages_queue.lock().unwrap()));
+            println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
+            
+            println!("Size of messages_to_print: {} bytes", mem::size_of_val(&self.messages_to_print.lock().unwrap()));
+            println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
+            
+
             let timers_handlers_len= self.timers_handlers.lock().unwrap().len();
-
-            // println!("Size of sent_messages: {} bytes", mem::size_of_val(&self.sent_messages.lock().unwrap()));
-            // println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
             let sent_messages_len= self.sent_messages.lock().unwrap().len();
-
-
-            // println!("Size of recv_ack_queue: {} bytes", mem::size_of_val(&self.recv_ack_queue.lock().unwrap()));
-            // println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
             let recv_ack_queue_len= self.recv_ack_queue.lock().unwrap().len();
-
-            // println!("Size of messages_queue: {} bytes", mem::size_of_val(&self.messages_queue.lock().unwrap()));
-            // println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
             let messages_queue_len= self.messages_queue.lock().unwrap().len();
-
-
-            // println!("Size of messages_to_print: {} bytes", mem::size_of_val(&self.messages_to_print.lock().unwrap()));
-            // println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
             let messages_to_print_len= self.messages_to_print.lock().unwrap().len();
 
             fn max_of_values(values: &[usize]) -> Option<usize> {
@@ -203,12 +211,11 @@ impl UdpClient {
                 if  new_max_value > stress_factor {
                     let mut slow_factor = self.slow_factor.lock().unwrap();
                     *slow_factor += 1;
-                    println!("SLOW DOWN !!    OLD {} - LOAD FACTOR: {}    -- SLOW FACTOR: {}",old_max_value,new_max_value,*slow_factor);
-                }else{
-                    let mut slow_factor = self.slow_factor.lock().unwrap();
-                    *slow_factor -= 1;
-                    println!("ACCELERATE    OLD {} - LOAD FACTOR: {}    -- SLOW FACTOR: {}",old_max_value,new_max_value,*slow_factor);
+                    println!("SLOW DOWN !!    - LOAD FACTOR: {}    -- SLOW FACTOR: {}",new_max_value,*slow_factor);
                 }
+            }else{
+                let mut slow_factor = self.slow_factor.lock().unwrap();
+                *slow_factor = 0;
             }
 
             let send_failure = self.send_failure.lock().unwrap();
@@ -242,7 +249,7 @@ impl UdpClient {
                 }
 
             } else {
-//                println!("Message {} delivered on attempt {}.",index,attempt);
+                println!("Message {} delivered on attempt {}.",index,attempt);
                 spin = false;
             }
         }
@@ -303,13 +310,11 @@ impl UdpClient {
             loop {
                 match rx.try_recv() {
                     Ok(message) => {
-                        //println!("Timer for message {} ended!",message);
                         let mut timers_handlers = self.timers_handlers.lock().unwrap();
                         let key: i32 = message.parse().unwrap();
 
                         if let Some(task) = timers_handlers.remove(&key) {
                             task.join().unwrap();
-                            //println!("Joined and removed element with key: {}", key);
                         } else {
                             println!("Key not found in the timers_handlers.");
                         }
@@ -324,8 +329,6 @@ impl UdpClient {
             index += 1;
         }
     }
-
-
 
     fn main_loop(self: &Arc<Self>){
         let client_clone = Arc::clone(&self);
@@ -401,7 +404,7 @@ impl UdpClient {
                 let socket = self.socket.lock().unwrap();
                 socket.send(msg.as_bytes()).unwrap();
             }
-//            println!("Message sent: {:?}", msg);
+            println!("Message sent: {:?}", msg);
             {
                 let mut sent_messages = self.sent_messages.lock().unwrap();
                 sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
@@ -423,22 +426,22 @@ impl UdpClient {
                     recv_ack_queue = self.recv_ack_queue_condvar.wait(recv_ack_queue).unwrap();
                 }
             }
+            
+            loop {
+                {
+                    let recv_ack_queue = self.recv_ack_queue.lock().unwrap();
+                    let recv_ack_queue_empty = recv_ack_queue.is_empty();
+                    if recv_ack_queue_empty {break;}
+                }
 
-            while !self.recv_ack_queue.lock().unwrap().is_empty() {
-                let ack_n;
                 {
                     let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
-                    ack_n = recv_ack_queue.pop_front().unwrap();
-                }
-                {
                     let mut sent_messages = self.sent_messages.lock().unwrap();
-                    match sent_messages.remove(&ack_n) {
-                        Some(msg) => {
-                            //println!("Message with sequence {} successfully removed: {:?}.", ack_n, msg);
-                        }
-                        None => {
-//                            println!("Duplicate ACK received for sequence {}: message already removed.", ack_n);
-                        }
+                    let ack_n = recv_ack_queue.front().unwrap();
+                    if let Some(_) = sent_messages.remove(&ack_n) {
+                        recv_ack_queue.pop_front().unwrap();
+                    } else {
+                        continue;
                     }
                 }
             }
@@ -461,20 +464,18 @@ impl UdpClient {
                     let (seq, msg_t, s) = msg_pack::msg_unpack(cleaned_message);
                     match msg_t {
                         MSG_TYPE::MSG => {
-                            //println!("MSG received: {}", s);
                             {
                                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
                                 messages_to_print.insert(seq,s);
-                                self.messages_to_print_condvar.notify_all();
                             }
+                            self.messages_to_print_condvar.notify_all();
                         }
                         MSG_TYPE::ACK =>{
-                            //println!("ACK received: {}", seq);
                             {
                                 let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
                                 recv_ack_queue.push_back(seq);
-                                self.recv_ack_queue_condvar.notify_all();
                             }
+                            self.recv_ack_queue_condvar.notify_all();
                         }
                         MSG_TYPE::UNKNOWN => {
                             println!("Message type unknown.");
