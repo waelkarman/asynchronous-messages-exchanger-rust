@@ -75,40 +75,6 @@ impl UdpClient {
         instance.main_loop();
     }
 
-    fn add_to_messages_queue(&self,s: &str){
-        let mut msg_queue = self.messages_queue.lock().unwrap();
-        msg_queue.push_back(s.to_string());
-    }
-
-    fn message_generator(&self){
-        let mut rng = rand::thread_rng();
-        loop{
-            let mut random_number = 0;
-            if self.speed == Speed::Dynamic.into() {
-                random_number = rng.gen_range(1..=5);
-                thread::sleep(Duration::from_millis(random_number));
-            }
-            *self.current_speed.lock().unwrap() = random_number;
-            let mut message = String::from("HELLO ");
-            message.push_str(random_number.to_string().as_str());
-            message.push_str("ms");
-            self.add_to_messages_queue(&message);
-            self.messages_queue_condvar.notify_all();
-
-            {
-                let slow_down = *self.slow_down_messages_generation.lock().unwrap();
-                if slow_down {
-                    {
-                        let mut slow_down_messages_generation = self.slow_down_messages_generation.lock().unwrap();
-                        while *slow_down_messages_generation == true {
-                            slow_down_messages_generation= self.slow_down_messages_generation_condvar.wait(slow_down_messages_generation).unwrap();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn initialize(&self) {
         let socket   = self.socket.lock().unwrap();
         socket.connect("127.0.0.1:8080").expect("Connection failed.");
@@ -286,6 +252,46 @@ impl UdpClient {
         }
     }
 
+    fn message_generator(&self){
+        let mut rng = rand::thread_rng();
+        loop{
+            let mut random_number = 0;
+            if self.speed == Speed::Dynamic.into() {
+                random_number = rng.gen_range(1..=5);
+                thread::sleep(Duration::from_millis(random_number));
+            }
+            *self.current_speed.lock().unwrap() = random_number;
+            let mut message = String::from("HELLO ");
+            message.push_str(random_number.to_string().as_str());
+            message.push_str("ms");
+
+            let msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MsgType::MSG,message);
+            {
+                let mut msg_queue = self.messages_queue.lock().unwrap();
+                msg_queue.push_back(msg);
+            }
+
+            {
+                let updated_seq = *self.sent_sequence.lock().unwrap();
+                *self.sent_sequence.lock().unwrap() = (updated_seq+1) % *self.limit;
+            }
+            
+            self.messages_queue_condvar.notify_all();
+
+            {
+                let slow_down = *self.slow_down_messages_generation.lock().unwrap();
+                if slow_down {
+                    {
+                        let mut slow_down_messages_generation = self.slow_down_messages_generation.lock().unwrap();
+                        while *slow_down_messages_generation == true {
+                            slow_down_messages_generation= self.slow_down_messages_generation_condvar.wait(slow_down_messages_generation).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn fetch_and_send_loop(&self) {
         loop {
             {
@@ -309,7 +315,6 @@ impl UdpClient {
                 let mut mq = self.messages_queue.lock().unwrap();
                 msg = mq.pop_front().unwrap();
             }
-            msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MsgType::MSG,msg);
 
             {
                 let socket = self.socket.lock().unwrap();
@@ -320,11 +325,6 @@ impl UdpClient {
                 let mut sent_messages = self.sent_messages.lock().unwrap();
                 sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
                 self.sent_messages_condvar.notify_all();
-            }
-
-            {
-                let updated_seq = *self.sent_sequence.lock().unwrap();
-                *self.sent_sequence.lock().unwrap() = (updated_seq+1) % *self.limit;
             }
 
             self.referee_condvar.notify_all();
