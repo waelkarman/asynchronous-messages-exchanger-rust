@@ -275,7 +275,7 @@ impl UdpClient {
                 let updated_seq = *self.sent_sequence.lock().unwrap();
                 *self.sent_sequence.lock().unwrap() = (updated_seq+1) % *self.limit;
             }
-            
+
             self.messages_queue_condvar.notify_all();
 
             {
@@ -498,9 +498,14 @@ impl UdpClient {
                             //println!("Received MSG: {}",seq);
                             {
                                 let mut messages_to_print = self.messages_to_print.lock().unwrap();
-                                messages_to_print.insert(seq,s);
+                                messages_to_print.insert(seq,s.clone());
                             }
                             self.messages_to_print_condvar.notify_all();
+                            let ack_msg = msg_pack::msg_pack(seq, MsgType::ACK,s);
+                            {
+                                let mut msg_queue = self.messages_queue.lock().unwrap();
+                                msg_queue.push_back(ack_msg);
+                            }
                         }
                         MsgType::ACK =>{
                             //println!("Received ACK: {}",seq);
