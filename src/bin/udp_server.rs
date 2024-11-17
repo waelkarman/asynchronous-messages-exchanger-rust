@@ -1,7 +1,10 @@
+#![allow(warnings)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 use std::net::UdpSocket;
 use std::str;
 
-use asynchronous_messages_exchanger_rust::utilities::{self, MSG_TYPE};
+use asynchronous_messages_exchanger_rust::utilities::{self, MsgType};
 mod msg_pack;
 
 struct UdpServer{
@@ -25,9 +28,9 @@ impl UdpServer {
     
             let (seq, msg_t, s) = msg_pack::msg_unpack(String::from(msg));
 
-            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::ACK, s.clone());
+            let response_plus = msg_pack::msg_pack(seq, MsgType::ACK, s.clone());
             self.socket.send_to(response_plus.as_bytes(), client_addr).unwrap();
-            let response_plus = msg_pack::msg_pack(seq, MSG_TYPE::MSG, s.clone());
+            let response_plus = msg_pack::msg_pack(seq, MsgType::MSG, s.clone());
             self.socket.send_to(response_plus.as_bytes(), client_addr).unwrap();
         }
     }

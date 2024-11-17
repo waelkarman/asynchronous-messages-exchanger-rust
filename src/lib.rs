@@ -1,6 +1,6 @@
 pub mod utilities {
     #[derive(Debug, PartialEq)]
-    pub enum MSG_TYPE {
+    pub enum MsgType {
         MSG,
         ACK,
         UNKNOWN,
