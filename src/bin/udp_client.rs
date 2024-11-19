@@ -139,7 +139,7 @@ impl UdpClient {
                 }
 
                 if (message_processed % *self.ordered_window_size) as i32 == *self.ordered_window_size - 1 {
-                    println!("{:?}", ordered_window);
+                    println!("RECEIVED: {:?}", ordered_window);
                 }
 
                 message_processed = (message_processed+1) % *self.limit;
