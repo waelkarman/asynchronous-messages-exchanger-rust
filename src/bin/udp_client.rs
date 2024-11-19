@@ -25,7 +25,6 @@ struct UdpClient{
     recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
-    t_tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     timers_handlers: Arc<Mutex<HashMap<i32,std::thread::JoinHandle<()>>>>,
     messages_queue: Arc<Mutex<VecDeque<String>>>,
@@ -57,7 +56,6 @@ impl UdpClient {
             recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
-            t_tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             timers_handlers: Arc::new(Mutex::new(HashMap::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -166,11 +164,11 @@ impl UdpClient {
             // println!("Size of messages_queue: {} bytes", mem::size_of_val(&self.messages_queue.lock().unwrap()));
             // println!("Size of messages_to_print: {} bytes", mem::size_of_val(&self.messages_to_print.lock().unwrap()));
             
-            println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
-            println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
-            println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
-            println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
-            println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
+            // println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
+            // println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
+            // println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
+            // println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
+            // println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
             
             let messages_queue_len= self.messages_queue.lock().unwrap().len();
             
@@ -185,7 +183,6 @@ impl UdpClient {
 
             }else{
                 self.slow_down_messages_generation.store(false, std::sync::atomic::Ordering::SeqCst);
-                //self.slow_down_messages_generation_condvar.notify_all();
             }
 
             let send_failure = self.send_failure.load(std::sync::atomic::Ordering::SeqCst);
@@ -293,10 +290,6 @@ impl UdpClient {
                 }
             }
 
-            // while self.referee.load(std::sync::atomic::Ordering::SeqCst) == 1 {
-            //     thread::sleep(Duration::from_millis(1));
-            // }
-
             {    
                 let mut mq = self.messages_queue.lock().unwrap();
                 if let Some(gen_msg) = mq.pop_front() {
@@ -347,8 +340,6 @@ impl UdpClient {
                     }
                 }
             }
-
-            //self.referee.store(1, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
@@ -362,7 +353,6 @@ impl UdpClient {
                 let sent_messages = self.sent_messages.lock().unwrap();
 
                 if let Some(msg) = sent_messages.get(&index) {
-                    // println!("MEssaggio ancora qua: {}, -con index {}",msg,index);
                     {
                         println!("{:?}", sent_messages);
                     }
