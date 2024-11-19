@@ -3,15 +3,14 @@
 - Rust
 
 # Build and run:
-to compile and run client and server in a separate docker please use:
+To compile and run both the client and the server, execute the following commands:
 ```
-cargo build; cargo run --bin udp-client
 cargo build; cargo run --bin udp-server
+cargo build; cargo run --bin udp-client
 ```
 
 # Arch drawing:
 <img src="docs/main-view.png">
 
 ###### Improvements : 
-[still in development]
-- trsforma pure il server
+- introduce Max mode
