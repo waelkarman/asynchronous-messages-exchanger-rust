@@ -1,13 +1,14 @@
 #![allow(unused_imports)]
 
-use std::net::UdpSocket;
-use std::thread;
+use std::sync::atomic::{AtomicI32, AtomicBool, AtomicU64};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
 use std::collections::VecDeque;
 use std::collections::HashMap;
+use std::time::Duration;
+use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::process;
+use std::thread;
 use rand::Rng;
 
 use std::mem;
@@ -17,27 +18,28 @@ use asynchronous_messages_exchanger_rust::utilities::Speed;
 mod msg_pack;
 
 struct UdpClient{
-    sent_sequence: Arc<Mutex<i32>>,
+    sent_sequence: Arc<AtomicI32>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
     sent_messages_condvar: Arc<Condvar>,
     recv_ack_queue: Arc<Mutex<VecDeque<i32>>>,
     recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
     tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
+    t_tasks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
     handlers: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
     timers_handlers: Arc<Mutex<HashMap<i32,std::thread::JoinHandle<()>>>>,
     messages_queue: Arc<Mutex<VecDeque<String>>>,
     messages_queue_condvar: Arc<Condvar>,
     messages_to_print: Arc<Mutex<HashMap<i32,String>>>,
     messages_to_print_condvar: Arc<Condvar>,
-    send_failure: Arc<Mutex<i32>>,
+    send_failure: Arc<AtomicI32>,
     ordered_window_size: Arc<i32>,
     limit: Arc<i32>,
     speed: bool,
-    current_speed: Arc<Mutex<u64>>,
-    slow_down_messages_generation: Arc<Mutex<bool>>,
+    current_speed: Arc<AtomicU64>,
+    slow_down_messages_generation: Arc<AtomicBool>,
     slow_down_messages_generation_condvar: Arc<Condvar>,
-    referee: Arc<Mutex<i32>>,
+    referee: Arc<AtomicI32>,
     referee_condvar: Arc<Condvar>,
 }
 
@@ -48,27 +50,28 @@ impl UdpClient {
         socket.set_nonblocking(true).expect("Error setting non blocking");
         let ordered_window_size = 10;
         let instance= Arc::new(UdpClient {
-            sent_sequence: Arc::new(Mutex::new(0)),
+            sent_sequence: Arc::new(AtomicI32::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
             sent_messages_condvar: Arc::new(Condvar::new()),
             recv_ack_queue: Arc::new(Mutex::new(VecDeque::new())),
             recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
             tasks:  Arc::new(Mutex::new(Vec::new())),
+            t_tasks:  Arc::new(Mutex::new(Vec::new())),
             handlers: Arc::new(Mutex::new(Vec::new())),
             timers_handlers: Arc::new(Mutex::new(HashMap::new())),
             messages_queue: Arc::new(Mutex::new(VecDeque::new())),
             messages_queue_condvar: Arc::new(Condvar::new()),
             messages_to_print: Arc::new(Mutex::new(HashMap::new())),
             messages_to_print_condvar: Arc::new(Condvar::new()),
-            send_failure: Arc::new(Mutex::new(0)),
+            send_failure: Arc::new(AtomicI32::new(0)),
             ordered_window_size: Arc::new(ordered_window_size),
             limit: Arc::new(200000000*ordered_window_size),
             speed: mode.into(),
-            current_speed: Arc::new(Mutex::new(0)),
-            slow_down_messages_generation: Arc::new(Mutex::new(false)),
+            current_speed: Arc::new(AtomicU64::new(0)),
+            slow_down_messages_generation: Arc::new(AtomicBool::new(false)),
             slow_down_messages_generation_condvar: Arc::new(Condvar::new()),
-            referee: Arc::new(Mutex::new(0)),
+            referee: Arc::new(AtomicI32::new(0)),
             referee_condvar: Arc::new(Condvar::new()),
         });
         instance.initialize();
@@ -150,7 +153,7 @@ impl UdpClient {
         let stress_factor = 100;
         loop{
             if self.speed == Speed::Dynamic.into() {
-                let current_speed = *self.current_speed.lock().unwrap();
+                let current_speed = self.current_speed.load(std::sync::atomic::Ordering::SeqCst);
                 thread::sleep(Duration::from_millis(current_speed*10));
             }else{
                 thread::sleep(Duration::from_millis(1));
@@ -163,36 +166,30 @@ impl UdpClient {
             // println!("Size of messages_queue: {} bytes", mem::size_of_val(&self.messages_queue.lock().unwrap()));
             // println!("Size of messages_to_print: {} bytes", mem::size_of_val(&self.messages_to_print.lock().unwrap()));
             
-            // println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
-            // println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
-            // println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
-            // println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
-            // println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
+            println!("timers_handlers size: {}", self.timers_handlers.lock().unwrap().len());
+            println!("sent_messages size: {}", self.sent_messages.lock().unwrap().len());
+            println!("recv_ack_queue size: {}", self.recv_ack_queue.lock().unwrap().len());
+            println!("messages_queue size: {}", self.messages_queue.lock().unwrap().len());
+            println!("messages_to_print size: {}", self.messages_to_print.lock().unwrap().len());
             
             let messages_queue_len= self.messages_queue.lock().unwrap().len();
             
             if  messages_queue_len > stress_factor 
             {
-                {
-                    let mut slow_down = self.slow_down_messages_generation.lock().unwrap();
-                    *slow_down = true;
-                }
+                self.slow_down_messages_generation.store(true, std::sync::atomic::Ordering::SeqCst); // Imposta true
+
                 //println!("Speed Controller    - messages_queue size over the stress_factor: {} -> 100 ",messages_queue_len);
                 self.messages_queue_condvar.notify_all();
-                let mut referee = self.referee.lock().unwrap();
-                *referee = 0;
+                self.referee.store(0, std::sync::atomic::Ordering::SeqCst);
                 self.referee_condvar.notify_all();
 
             }else{
-                {
-                    let mut slow_down = self.slow_down_messages_generation.lock().unwrap();
-                    *slow_down = false;
-                }
-                self.slow_down_messages_generation_condvar.notify_all();
+                self.slow_down_messages_generation.store(false, std::sync::atomic::Ordering::SeqCst);
+                //self.slow_down_messages_generation_condvar.notify_all();
             }
 
-            let send_failure = self.send_failure.lock().unwrap();
-            if *send_failure > 0 {
+            let send_failure = self.send_failure.load(std::sync::atomic::Ordering::SeqCst);
+            if send_failure > 0 {
                 println!("fatal error: broken pipe");
                 process::exit(1);
             }
@@ -218,11 +215,6 @@ impl UdpClient {
         let client_clone = Arc::clone(&self);
         self.tasks.lock().unwrap().push(Arc::new(move || {
             client_clone.confirm_message_delivery();
-        }));
-
-        let client_clone = Arc::clone(&self);
-        self.tasks.lock().unwrap().push(Arc::new(move || {
-            client_clone.timers_loop();
         }));
 
         let client_clone = Arc::clone(&self);
@@ -260,39 +252,39 @@ impl UdpClient {
                 random_number = rng.gen_range(1..=5);
                 thread::sleep(Duration::from_millis(random_number));
             }
-            *self.current_speed.lock().unwrap() = random_number;
+            self.current_speed.store(random_number as u64, std::sync::atomic::Ordering::SeqCst);
             let mut message = String::from("HELLO ");
             message.push_str(random_number.to_string().as_str());
             message.push_str("ms");
 
-            let msg = msg_pack::msg_pack(*self.sent_sequence.lock().unwrap(), MsgType::MSG,message);
+            let sequence = self.sent_sequence.load(std::sync::atomic::Ordering::SeqCst);
+            let msg = msg_pack::msg_pack(sequence, MsgType::MSG, message);
             {
                 let mut msg_queue = self.messages_queue.lock().unwrap();
                 msg_queue.push_back(msg);
             }
 
-            {
-                let updated_seq = *self.sent_sequence.lock().unwrap();
-                *self.sent_sequence.lock().unwrap() = (updated_seq+1) % *self.limit;
-            }
+            let updated_seq = self.sent_sequence.load(std::sync::atomic::Ordering::SeqCst);
+            let limit = *self.limit;
+            self.sent_sequence.store((updated_seq + 1) % limit, std::sync::atomic::Ordering::SeqCst);
 
             self.messages_queue_condvar.notify_all();
 
-            {
-                let slow_down = *self.slow_down_messages_generation.lock().unwrap();
-                if slow_down {
-                    {
-                        let mut slow_down_messages_generation = self.slow_down_messages_generation.lock().unwrap();
-                        while *slow_down_messages_generation == true {
-                            slow_down_messages_generation= self.slow_down_messages_generation_condvar.wait(slow_down_messages_generation).unwrap();
-                        }
+            let slow_down_messages_generation = self.slow_down_messages_generation.load(std::sync::atomic::Ordering::SeqCst);
+            if slow_down_messages_generation {
+                {
+                    while slow_down_messages_generation == true {
+                        thread::sleep(Duration::from_millis(1));
                     }
                 }
             }
+
         }
     }
 
-    fn fetch_and_send_loop(&self) {
+    fn fetch_and_send_loop(self: &Arc<Self>) {
+        let (tx, rx) = mpsc::channel();
+
         loop {
             {
                 let mut messages_queue = self.messages_queue.lock().unwrap();
@@ -301,130 +293,40 @@ impl UdpClient {
                 }
             }
 
-            {
-                let mut referee = self.referee.lock().unwrap();
-                while *referee == 1 {
-                    referee = self.referee_condvar.wait(referee).unwrap();
-                }
-                *referee = 1;
-            }
+            // while self.referee.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+            //     thread::sleep(Duration::from_millis(1));
+            // }
 
-            let mut msg;
-
-            {
+            {    
                 let mut mq = self.messages_queue.lock().unwrap();
-                msg = mq.pop_front().unwrap();
-            }
-
-            {
-                let socket = self.socket.lock().unwrap();
-                socket.send(msg.as_bytes()).unwrap();
-            }
-            println!("Message sent: {:?}", msg);
-            {
-                let mut sent_messages = self.sent_messages.lock().unwrap();
-                sent_messages.insert(*self.sent_sequence.lock().unwrap(), msg);
-                self.sent_messages_condvar.notify_all();
-            }
-
-            self.referee_condvar.notify_all();
-        }
-    }
-
-    fn timer_launcher(&self, n: i32, index: i32) {
-        let mut attempt = 1;
-        let mut spin = true;
-        while attempt < 4 && spin {
-            thread::sleep(Duration::from_millis(n as u64));
-            let contains;
-            {
-                let sent_messages = self.sent_messages.lock().unwrap();
-                contains = sent_messages.contains_key(&index);
-            }
-
-            if contains {
-                println!("Timeout:{} retry attempt: {}/3",index,attempt);
-                attempt += 1;
-
-                let sent_messages = self.sent_messages.lock().unwrap();
-                if let Some(msg) = sent_messages.get(&index) {
+                if let Some(gen_msg) = mq.pop_front() {
+                    let (seq, msg_t, msg) = msg_pack::msg_unpack(String::from(gen_msg.clone()));
                     {
-                        let mut mq = self.messages_queue.lock().unwrap();
-                        let msg = msg_pack::msg_pack(index, MsgType::MSG,msg.to_string());
-                        mq.push_front(msg); 
+                        let socket = self.socket.lock().unwrap();
+                        socket.send(gen_msg.as_bytes()).unwrap();
                     }
-                    println!("Message resend: {:?}", msg);
-                }
-
-            } else {
-                println!("Message {} delivered on attempt {}.",index,attempt);
-                spin = false;
-            }
-        }
-
-        if attempt == 4 || spin
-        {
-            println!("Message {} delivery failure.",index);
-            *self.send_failure.lock().unwrap() += 1;
-        }
-
-    }
-
-    fn timers_loop(self: &Arc<Self>){
-        let (tx, rx) = mpsc::channel();
-        let mut index = 0;
-        loop{
-
-            {
-                let mut referee = self.referee.lock().unwrap();
-                while *referee == 0 {
-                    referee = self.referee_condvar.wait(referee).unwrap();
-                }
-                *referee = 0;
-            }
-                        
-            let mut contains;
-            {
-                let sent_messages = self.sent_messages.lock().unwrap();
-                contains = if sent_messages.contains_key(&index) { true } else { false };
-            }
-
-            while contains == false {
-                {
-                    let mut sent_messages = self.sent_messages.lock().unwrap();
-                    while sent_messages.is_empty() {
-                        sent_messages = self.sent_messages_condvar.wait(sent_messages).unwrap();
+                    println!("Message sent: {:?}", gen_msg);
+                    {
+                        let mut sent_messages = self.sent_messages.lock().unwrap();
+                        sent_messages.insert(seq, msg.clone());
+                        self.sent_messages_condvar.notify_all();
                     }
-                }
-                {
-                    let sent_messages = self.sent_messages.lock().unwrap();
-                    contains = if sent_messages.contains_key(&index) { true } else { false };
-                }
-            }
 
-            if contains == true {
-                let thread_tx = tx.clone();
-                let client_clone = Arc::clone(&self);
-                let index_ref = index;
-
-                let mut tasks = self.tasks.lock().unwrap();
-                tasks.push(Arc::new(move || {
-                    let time = *client_clone.current_speed.lock().unwrap()*2+10;
-                    client_clone.timer_launcher(time as i32,index);
-                    thread_tx.send(format!("{}",index_ref)).unwrap();
-                }));
-                drop(tasks);
-
-                while !self.tasks.lock().unwrap().is_empty() {
+                    let thread_tx = tx.clone();
                     let client_clone = Arc::clone(&self);
-                    let mut timers_handlers = self.timers_handlers.lock().unwrap();
-                    timers_handlers.insert(index,thread::spawn(move || {
-                        client_clone.task_launcher();
-                    }));
-                }
+                    let mut timers_handlers: std::sync::MutexGuard<'_, HashMap<i32, thread::JoinHandle<()>>> = self.timers_handlers.lock().unwrap();
 
-                self.referee_condvar.notify_all();
+                    let msg_moved= msg.clone(); 
+                    timers_handlers.insert(seq,thread::spawn(move || {
+                        println!("Timer for {}.",seq);
+                        let time = client_clone.current_speed.load(std::sync::atomic::Ordering::SeqCst) * 2 + 10;
+                        client_clone.timer_launcher(time as i32,seq,msg_moved);
+                        thread_tx.send(format!("{}",&seq)).unwrap();
+                    }));
+
+                }
             }
+
 
             loop {
                 match rx.try_recv() {
@@ -445,8 +347,49 @@ impl UdpClient {
                     }
                 }
             }
-            index += 1;
+
+            //self.referee.store(1, std::sync::atomic::Ordering::SeqCst);
         }
+    }
+
+    fn timer_launcher(&self, n: i32, index: i32, s:String) {
+        let mut stop = false;
+        let mut attempt = 0;
+        while !stop {
+            thread::sleep(Duration::from_millis(n as u64));
+ 
+            {
+                let sent_messages = self.sent_messages.lock().unwrap();
+
+                if let Some(msg) = sent_messages.get(&index) {
+                    // println!("MEssaggio ancora qua: {}, -con index {}",msg,index);
+                    {
+                        println!("{:?}", sent_messages);
+                    }
+                    
+                    attempt += 1;
+                    println!("Timeout:{} retry attempt: {}/3",index,attempt);
+                    
+                    let msg = msg_pack::msg_pack(index, MsgType::MSG,msg.to_string());
+                    {
+                        let socket = self.socket.lock().unwrap();
+                        socket.send(msg.as_bytes()).unwrap();
+                    }
+                    self.recv_ack_queue_condvar.notify_all();
+                
+                }else{
+                    stop = true;
+                    println!("{} delivered.",index);
+                }
+            }
+
+            if attempt == 4
+            {
+                println!("Message {} delivery failure.",index);
+                self.send_failure.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
     }
 
     fn confirm_message_delivery(&self) {
@@ -457,23 +400,25 @@ impl UdpClient {
                     recv_ack_queue = self.recv_ack_queue_condvar.wait(recv_ack_queue).unwrap();
                 }
             }
-            
-            loop {
-                {
+                        
+            loop{
+                let ack_n = {
                     let recv_ack_queue = self.recv_ack_queue.lock().unwrap();
-                    let recv_ack_queue_empty = recv_ack_queue.is_empty();
-                    if recv_ack_queue_empty {break;}
-                }
-
-                {
-                    let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
-                    let mut sent_messages = self.sent_messages.lock().unwrap();
-                    let ack_n = recv_ack_queue.front().unwrap();
-                    if let Some(_) = sent_messages.remove(&ack_n) {
-                        recv_ack_queue.pop_front().unwrap();
-                    } else {
-                        continue;
+                    match recv_ack_queue.front() {
+                        Some(&ack_n) => ack_n, 
+                        None => break,       
                     }
+                };
+                
+                let ack_processed = {
+                    let mut sent_messages = self.sent_messages.lock().unwrap();
+                    sent_messages.remove(&ack_n)
+                };
+                
+                if ack_processed.is_some() {
+                    let mut recv_ack_queue = self.recv_ack_queue.lock().unwrap();
+                    recv_ack_queue.pop_front(); 
+                    //println!("Process ACK num: {}", ack_n);
                 }
             }
         }
@@ -503,8 +448,8 @@ impl UdpClient {
                             self.messages_to_print_condvar.notify_all();
                             let ack_msg = msg_pack::msg_pack(seq, MsgType::ACK,s);
                             {
-                                let mut msg_queue = self.messages_queue.lock().unwrap();
-                                msg_queue.push_back(ack_msg);
+                                let socket = self.socket.lock().unwrap();
+                                socket.send(ack_msg.as_bytes()).unwrap();
                             }
                         }
                         MsgType::ACK =>{
@@ -531,6 +476,6 @@ impl UdpClient {
 
 
 fn main() {
-    UdpClient::run(Speed::Max);
+    UdpClient::run(Speed::Dynamic);
 }
 
