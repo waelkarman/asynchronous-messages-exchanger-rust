@@ -255,7 +255,7 @@ impl UdpServer {
 
             let mut random_number = 0;
             if self.speed == Speed::Dynamic.into() {
-                random_number = rng.gen_range(1..=5);
+                random_number = rng.gen_range(1..=1);
                 thread::sleep(Duration::from_millis(random_number));
             }
             self.current_speed.store(random_number as u64, std::sync::atomic::Ordering::SeqCst);
@@ -364,10 +364,6 @@ impl UdpServer {
                 let sent_messages = self.sent_messages.lock().unwrap();
 
                 if let Some(msg) = sent_messages.get(&index) {
-                    {
-                        println!("{:?}", sent_messages);
-                    }
-                    
                     attempt += 1;
                     println!("Timeout:{} retry attempt: {}/3",index,attempt);
                     
