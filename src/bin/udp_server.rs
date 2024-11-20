@@ -80,6 +80,7 @@ impl UdpServer {
             generation_condvar: Arc::new(Condvar::new()),
 
         });
+        println!("Please run the client . .");
         instance.main_loop();
     }
 
