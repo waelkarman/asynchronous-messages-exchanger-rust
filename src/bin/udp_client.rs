@@ -354,7 +354,7 @@ impl UdpClient {
 
                 if let Some(msg) = sent_messages.get(&index) {
                     attempt += 1;
-                    println!("Timeout:{} retry attempt: {}/3",index,attempt);
+                    println!("Timeout:{} retry attempt: {}/4",index,attempt);
                     
                     let msg = msg_pack::msg_pack(index, MsgType::MSG,msg.to_string());
                     {
