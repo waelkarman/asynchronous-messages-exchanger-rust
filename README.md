@@ -1,4 +1,4 @@
-# Asynchronous Client-Server communication [in development]
+# Asynchronous Client-Server communication [deferred]
 
 - Rust
 
@@ -13,4 +13,4 @@ cargo build; cargo run --bin udp-client
 <img src="docs/main-view.png">
 
 ###### Improvements : 
-- introduce Max mode
+- develop Max mode
