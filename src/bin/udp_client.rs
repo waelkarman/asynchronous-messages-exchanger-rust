@@ -20,7 +20,6 @@ mod msg_pack;
 struct UdpClient{
     sent_sequence: Arc<AtomicI32>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
-    sent_messages_condvar: Arc<Condvar>,
     recv_ack_queue: Arc<Mutex<VecDeque<i32>>>,
     recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
@@ -37,9 +36,7 @@ struct UdpClient{
     speed: bool,
     current_speed: Arc<AtomicU64>,
     slow_down_messages_generation: Arc<AtomicBool>,
-    slow_down_messages_generation_condvar: Arc<Condvar>,
     referee: Arc<AtomicI32>,
-    referee_condvar: Arc<Condvar>,
 }
 
 impl UdpClient {
@@ -51,7 +48,6 @@ impl UdpClient {
         let instance= Arc::new(UdpClient {
             sent_sequence: Arc::new(AtomicI32::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
-            sent_messages_condvar: Arc::new(Condvar::new()),
             recv_ack_queue: Arc::new(Mutex::new(VecDeque::new())),
             recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
@@ -68,9 +64,7 @@ impl UdpClient {
             speed: mode.into(),
             current_speed: Arc::new(AtomicU64::new(0)),
             slow_down_messages_generation: Arc::new(AtomicBool::new(false)),
-            slow_down_messages_generation_condvar: Arc::new(Condvar::new()),
             referee: Arc::new(AtomicI32::new(0)),
-            referee_condvar: Arc::new(Condvar::new()),
         });
         instance.initialize();
         instance.main_loop();
@@ -179,7 +173,6 @@ impl UdpClient {
                 //println!("Speed Controller    - messages_queue size over the stress_factor: {} -> 100 ",messages_queue_len);
                 self.messages_queue_condvar.notify_all();
                 self.referee.store(0, std::sync::atomic::Ordering::SeqCst);
-                self.referee_condvar.notify_all();
 
             }else{
                 self.slow_down_messages_generation.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -302,7 +295,6 @@ impl UdpClient {
                     {
                         let mut sent_messages = self.sent_messages.lock().unwrap();
                         sent_messages.insert(seq, msg.clone());
-                        self.sent_messages_condvar.notify_all();
                     }
 
                     let thread_tx = tx.clone();

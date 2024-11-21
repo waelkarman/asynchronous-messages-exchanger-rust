@@ -22,7 +22,6 @@ struct UdpServer{
     src: Arc<Mutex<SocketAddr>>,
     sent_sequence: Arc<AtomicI32>,
     sent_messages: Arc<Mutex<HashMap<i32,String>>>,
-    sent_messages_condvar: Arc<Condvar>,
     recv_ack_queue: Arc<Mutex<VecDeque<i32>>>,
     recv_ack_queue_condvar: Arc<Condvar>,
     socket: Arc<Mutex<UdpSocket>>,
@@ -39,9 +38,7 @@ struct UdpServer{
     speed: bool,
     current_speed: Arc<AtomicU64>,
     slow_down_messages_generation: Arc<AtomicBool>,
-    slow_down_messages_generation_condvar: Arc<Condvar>,
     referee: Arc<AtomicI32>,
-    referee_condvar: Arc<Condvar>,
     generation: Arc<Mutex<bool>>,
     generation_condvar: Arc<Condvar>,
 }
@@ -56,7 +53,6 @@ impl UdpServer {
             src: Arc::new(Mutex::new("0.0.0.0:0".parse().unwrap())),
             sent_sequence: Arc::new(AtomicI32::new(0)),
             sent_messages: Arc::new(Mutex::new(HashMap::new())),
-            sent_messages_condvar: Arc::new(Condvar::new()),
             recv_ack_queue: Arc::new(Mutex::new(VecDeque::new())),
             recv_ack_queue_condvar: Arc::new(Condvar::new()),
             socket: Arc::new(Mutex::new(socket)),
@@ -73,9 +69,7 @@ impl UdpServer {
             speed: mode.into(),
             current_speed: Arc::new(AtomicU64::new(0)),
             slow_down_messages_generation: Arc::new(AtomicBool::new(false)),
-            slow_down_messages_generation_condvar: Arc::new(Condvar::new()),
             referee: Arc::new(AtomicI32::new(0)),
-            referee_condvar: Arc::new(Condvar::new()),
             generation: Arc::new(Mutex::new(false)),
             generation_condvar: Arc::new(Condvar::new()),
 
@@ -181,7 +175,6 @@ impl UdpServer {
                 //println!("Speed Controller    - messages_queue size over the stress_factor: {} -> 100 ",messages_queue_len);
                 self.messages_queue_condvar.notify_all();
                 self.referee.store(0, std::sync::atomic::Ordering::SeqCst);
-                self.referee_condvar.notify_all();
 
             }else{
                 self.slow_down_messages_generation.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -314,7 +307,6 @@ impl UdpServer {
                     {
                         let mut sent_messages = self.sent_messages.lock().unwrap();
                         sent_messages.insert(seq, msg.clone());
-                        self.sent_messages_condvar.notify_all();
                     }
 
                     let thread_tx = tx.clone();
