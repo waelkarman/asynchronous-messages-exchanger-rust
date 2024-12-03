@@ -1,4 +1,3 @@
-
 use asynchronous_messages_exchanger_rust::utilities::{MsgType};
 
 
@@ -33,11 +32,11 @@ mod tests {
 
     #[test]
     fn test_0() {
-        assert_eq!(msg_pack(MsgType::ACK,String::from("Ciaooo")), String::from("ACK.Ciaooo"));
+        assert_eq!(msg_pack(0, MsgType::ACK,String::from("Ciaooo")), String::from("0.ACK.Ciaooo"));
     }
 
     #[test]
     fn test_1() {
-        assert_eq!(msg_unpack(String::from("ACK.Ciaooo")), (MsgType::ACK, String::from("Ciaooo")));
+        assert_eq!(msg_unpack(String::from("0.ACK.Ciaooo")), (0, MsgType::ACK, String::from("Ciaooo")));
     }
 }
